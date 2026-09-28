@@ -186,6 +186,50 @@ aparicion, de modo que cada noticia mantiene la fecha en que fue vista por
 primera vez. La columna `Fecha de Extraccion` permite saber de que corrida
 procede cada registro.
 
+### 5. Notificaciones por correo
+
+`news_scraper.py` envia un correo cuando detecta noticias nuevas. Las
+credenciales se leen de **variables de entorno**, nunca del codigo.
+
+Configurarlas para la sesion actual de PowerShell:
+
+```powershell
+$env:EMAIL_EMISOR   = "tu.cuenta@gmail.com"
+$env:EMAIL_RECEPTOR = "destinatario@ejemplo.com"
+$env:EMAIL_PASSWORD = "xxxx xxxx xxxx xxxx"
+```
+
+Configurarlas de forma permanente (se guardan en Windows):
+
+```bat
+setx EMAIL_EMISOR "tu.cuenta@gmail.com"
+setx EMAIL_RECEPTOR "destinatario@ejemplo.com"
+setx EMAIL_PASSWORD "xxxx xxxx xxxx xxxx"
+```
+
+> **Importante:** con `setx` las variables solo estan disponibles en
+> terminales abiertas *despues* de ejecutarlo. Reinicia la terminal o
+> vuelve a iniciar sesion.
+
+> **Gmail requiere una "Contrasena de aplicacion"**, no la contrasena
+> normal de la cuenta. Se genera en
+> <https://myaccount.google.com/apppasswords> y necesita la verificacion en
+> dos pasos activada. El script se conecta por el puerto 465 con SSL, que es
+> lo que Gmail exige.
+
+Comportamiento del envio:
+
+- Si no hay noticias nuevas, **no se envia nada**. Esto evita recibir un
+  correo diario identico sin cambios.
+- Si faltan las variables de entorno, el scraper continua normalmente y solo
+  lo omite por pantalla.
+- Cualquier error de SMTP se captura y se informa, sin detener el script: un
+  fallo de correo nunca debe impedir guardar el historico en el Excel.
+
+La tarea programada creada para este proyecto deberia ejecutarse con las
+variables ya definidas, de lo contrario el correo no se enviara. Si las
+configuras con `setx`, la tarea las heredara automaticamente.
+
 Los archivos `.xlsx`, `.log` y la carpeta `logs/` estan excluidos en
 `.gitignore`: son datos generados, no codigo fuente, y se regeneran ejecutando
 los scripts.

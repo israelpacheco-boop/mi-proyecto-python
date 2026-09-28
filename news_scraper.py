@@ -13,10 +13,15 @@ Nota sobre selectores: los titulares de law360.com NO estan en <h1> ni
 comentarios de cada funcion.
 """
 
+import os
 import random
+import smtplib
 import sys
 import time
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr, formatdate
 from pathlib import Path
 
 import pandas as pd
@@ -43,6 +48,25 @@ HEADERS = {
 # peticiones de ambas fuentes lleguen juntas y disparen un bloqueo 429.
 DELAY_MIN = 2.0
 DELAY_MAX = 4.0
+
+# --- Configuracion de correo electronico ---------------------------------
+# Las credenciales NUNCA se escriben en el codigo: se leen de variables
+# de entorno. Configuralas con:
+#     $env:EMAIL_EMISOR   = "tu.cuenta@gmail.com"
+#     $env:EMAIL_RECEPTOR = "destinatario@ejemplo.com"
+#     $env:EMAIL_PASSWORD = "xxxx xxxx xxxx xxxx"
+# o de forma permanente:
+#     setx EMAIL_EMISOR "tu.cuenta@gmail.com"
+#
+# IMPORTANTE PARA GMAIL: hay que usar una "Contrasena de aplicacion",
+# NO la contrasena normal de la cuenta. Se genera en
+# https://myaccount.google.com/apppasswords y requiere verificacion en
+# dos pasos. Gmail ademas bloquea conexiones sin cifrar: por eso aqui
+# se usa el puerto 465 con SMTP sobre SSL.
+SMTP_SERVIDOR = "smtp.gmail.com"
+SMTP_PUERTO = 465
+SMTP_USAR_SSL = True
+NOMBRE_REMITENTE = "Monitor Noticias Legales"
 
 COLUMNAS = ["Fuente", "Seccion", "Titulo", "Autor", "Fecha de Extraccion"]
 
@@ -164,13 +188,165 @@ def scrape_law360(fecha):
     return filas
 
 
+def construir_html(nuevas):
+    """Genera el cuerpo HTML del correo a partir del DataFrame de novedades."""
+    color_fuente = {
+        "elderecho.com": "#0b5fff",
+        "law360.com": "#b8860b",
+    }
+
+    filas_html = []
+    for numero, fila in enumerate(nuevas.itertuples(index=False), start=1):
+        fuente = getattr(fila, "Fuente", "")
+        color = color_fuente.get(fuente, "#555555")
+        filas_html.append(f"""
+        <tr style="border-bottom:1px solid #e8eaed;">
+          <td style="padding:14px 16px;vertical-align:top;color:#8a8f98;
+                     font-size:13px;white-space:nowrap;">{numero}</td>
+          <td style="padding:14px 16px;vertical-align:top;">
+            <span style="display:inline-block;background:{color};color:#fff;
+                         font-size:11px;font-weight:600;letter-spacing:.3px;
+                         padding:3px 9px;border-radius:10px;">{fuente}</span>
+            <div style="color:#8a8f98;font-size:12px;margin-top:6px;">
+              {getattr(fila, "Seccion", "")}
+            </div>
+          </td>
+          <td style="padding:14px 16px;vertical-align:top;color:#1a1a1a;
+                     font-size:14px;font-weight:600;line-height:1.45;">
+            {getattr(fila, "Titulo", "")}
+          </td>
+          <td style="padding:14px 16px;vertical-align:top;color:#5f6368;
+                     font-size:13px;">{getattr(fila, "Autor", "")}</td>
+        </tr>""")
+
+    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:24px;background:#f1f3f4;
+             font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:760px;margin:0 auto;background:#ffffff;border-radius:12px;
+              overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.12);">
+
+    <div style="background:#202124;padding:26px 30px;">
+      <div style="color:#ffffff;font-size:19px;font-weight:600;">
+        Monitor de Noticias Legales
+      </div>
+      <div style="color:#9aa0a6;font-size:13px;margin-top:5px;">
+        {len(nuevas)} noticia(s) nueva(s) detectada(s) el {fecha}
+      </div>
+    </div>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+           style="border-collapse:collapse;">
+      <thead>
+        <tr style="background:#f8f9fa;">
+          <th style="padding:11px 16px;text-align:left;font-size:11px;
+                     color:#8a8f98;letter-spacing:.4px;">#</th>
+          <th style="padding:11px 16px;text-align:left;font-size:11px;
+                     color:#8a8f98;letter-spacing:.4px;">FUENTE / SECCION</th>
+          <th style="padding:11px 16px;text-align:left;font-size:11px;
+                     color:#8a8f98;letter-spacing:.4px;">TITULO</th>
+          <th style="padding:11px 16px;text-align:left;font-size:11px;
+                     color:#8a8f98;letter-spacing:.4px;">AUTOR</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(filas_html)}
+      </tbody>
+    </table>
+
+    <div style="padding:20px 30px;background:#f8f9fa;border-top:1px solid #e8eaed;
+                color:#8a8f98;font-size:12px;line-height:1.6;">
+      Notificaciones generadas automaticamente por
+      <strong>mi-proyecto-python</strong>.<br>
+      Fuentes: elderecho.com &middot; law360.com
+    </div>
+
+  </div>
+</body>
+</html>"""
+
+
+def enviar_correo(noticias_nuevas):
+    """Envia por correo las noticias nuevas detectadas.
+
+    Si no hay novedades, o faltan las variables de entorno, no se envia
+    nada. Nunca lanza excepcion: un fallo de correo no debe impedir que
+    el scraper guarde su historico.
+    """
+    if noticias_nuevas is None or noticias_nuevas.empty:
+        print("  [correo] Sin noticias nuevas: no se envia correo.")
+        return False
+
+    emisor = os.environ.get("EMAIL_EMISOR")
+    receptor = os.environ.get("EMAIL_RECEPTOR")
+    password = os.environ.get("EMAIL_PASSWORD")
+
+    faltantes = [
+        nombre
+        for nombre, valor in (
+            ("EMAIL_EMISOR", emisor),
+            ("EMAIL_RECEPTOR", receptor),
+            ("EMAIL_PASSWORD", password),
+        )
+        if not valor
+    ]
+    if faltantes:
+        print("  [correo] Omitido: faltan variables de entorno: "
+              f"{', '.join(faltantes)}")
+        print("            Configuralas con setx o $env: en PowerShell.")
+        return False
+
+    total = len(noticias_nuevas)
+    mensaje = MIMEMultipart("alternative")
+    mensaje["Subject"] = (
+        f"[{total}] noticia(s) nueva(s) del sector legal - {fecha_corta()}"
+    )
+    mensaje["From"] = formataddr((NOMBRE_REMITENTE, emisor))
+    mensaje["To"] = receptor
+    mensaje["Date"] = formatdate(localtime=True)
+    mensaje.attach(MIMEText(construir_html(noticias_nuevas), "html", "utf-8"))
+
+    try:
+        if SMTP_USAR_SSL:
+            with smtplib.SMTP_SSL(SMTP_SERVIDOR, SMTP_PUERTO, timeout=30) as s:
+                s.login(emisor, password)
+                s.sendmail(emisor, [receptor], mensaje.as_string())
+        else:
+            with smtplib.SMTP(SMTP_SERVIDOR, SMTP_PUERTO, timeout=30) as s:
+                s.starttls()
+                s.login(emisor, password)
+                s.sendmail(emisor, [receptor], mensaje.as_string())
+    except smtplib.SMTPAuthenticationError:
+        print("  [correo] Error de autenticacion. En Gmail debe usarse una "
+              "'Contrasena de aplicacion', no la contrasena normal.")
+        return False
+    except Exception as error:
+        print(f"  [correo] No se pudo enviar ({type(error).__name__}: {error})")
+        return False
+
+    print(f"  [correo] Enviado a {receptor}: {total} noticia(s) nueva(s).")
+    return True
+
+
+def fecha_corta():
+    """Fecha en formato dd/mm/aaaa HH:MM para el asunto del correo."""
+    return datetime.now().strftime("%d/%m/%Y %H:%M")
+
+
 def guardar_excel(df, ruta=ARCHIVO_SALIDA):
     """Guarda el DataFrame acumulando el historico y eliminando duplicados.
 
     Si el archivo ya existe, se lee con pandas, se concatena con las
     noticias nuevas y se descartan las filas cuyo Titulo ya estaba
     presente. Asi el archivo conserva la_union de todas las ejecuciones.
+
+    Devuelve (historico_completo, novedades), donde novedades son las
+    filas de esta ejecucion cuyo Titulo no existia previamente.
     """
+    titulos_previos = set()
     if ruta.exists():
         try:
             previos = pd.read_excel(ruta)
@@ -178,12 +354,12 @@ def guardar_excel(df, ruta=ARCHIVO_SALIDA):
             # con otra version del script.
             previos = previos.reindex(columns=COLUMNAS)
             previos = previos.dropna(subset=["Titulo"])
+            titulos_previos = set(previos["Titulo"])
             combined = pd.concat([previos, df], ignore_index=True)
             antes = len(combined)
             # Deduplicar por Titulo: la primera aparicion (la mas antigua)
             # se conserva, de modo que se conserva la fecha original.
-            combinado = combined.drop_duplicates(subset=["Titulo"], keep="first")
-            df = combinado
+            df = combined.drop_duplicates(subset=["Titulo"], keep="first")
             print(f"\n  [historico] {len(previos)} registros previos + "
                   f"{antes - len(previos)} nuevos = {antes} filas")
             print(f"  [historico] {antes - len(df)} duplicados eliminados")
@@ -191,8 +367,15 @@ def guardar_excel(df, ruta=ARCHIVO_SALIDA):
             print(f"  [AVISO] No se pudo leer el archivo previo "
                   f"({error}); se guardara solo la extraccion actual.")
 
+    # Solo se notifican las filas cuyo Titulo no estaba en el archivo previo.
+    if titulos_previos:
+        novedades = df[~df["Titulo"].isin(titulos_previos)]
+    else:
+        # Primera ejecucion: no hay historico, se notifica todo.
+        novedades = df
+
     df.to_excel(ruta, index=False, engine="openpyxl", sheet_name="Noticias")
-    return df
+    return df, novedades
 
 
 def main():
@@ -227,11 +410,17 @@ def main():
     print("\nPrimeras 5 filas:")
     print(df.head(5)[["Fuente", "Seccion", "Titulo"]].to_string(index=False))
 
-    df_final = guardar_excel(df)
+    df_final, novedades = guardar_excel(df)
     print(f"\nArchivo: {ARCHIVO_SALIDA}")
     print(f"Tamano: {ARCHIVO_SALIDA.stat().st_size} bytes")
     print(f"Registros en esta ejecucion: {len(df)}")
     print(f"Total acumulado en el historico: {len(df_final)}")
+    print(f"Noticias nuevas detectadas: {len(novedades)}")
+
+    # Notificacion por correo solo si hay novedades.
+    print("\nEnviando notificacion por correo...")
+    enviar_correo(novedades)
+
     print("=" * 60)
     return 0
 
