@@ -13,7 +13,9 @@ Nota sobre selectores: los titulares de law360.com NO estan en <h1> ni
 comentarios de cada funcion.
 """
 
+import random
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -37,18 +39,49 @@ HEADERS = {
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
 }
 
+# Retardo aleatorio entre peticiones, en segundos. Evita que las
+# peticiones de ambas fuentes lleguen juntas y disparen un bloqueo 429.
+DELAY_MIN = 2.0
+DELAY_MAX = 4.0
+
 COLUMNAS = ["Fuente", "Seccion", "Titulo", "Autor", "Fecha de Extraccion"]
 
 
-def obtener_soup(url):
-    """Descarga una pagina y devuelve su BeautifulSoup, o None si falla."""
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
-        r.raise_for_status()
-    except requests.RequestException as error:
-        print(f"  [ERROR] {url} -> {error}")
-        return None
-    return BeautifulSoup(r.text, "html.parser")
+def esperar_entre_peticiones(etiqueta=""):
+    """Pausa aleatoria de entre DELAY_MIN y DELAY_MAX segundos.
+
+    Se usa entre el procesamiento de una pagina y otra para imitar el
+    ritmo de una persona navegando, en lugar de golpear el servidor.
+    """
+    espera = random.uniform(DELAY_MIN, DELAY_MAX)
+    sufijo = f" antes de procesar {etiqueta}" if etiqueta else ""
+    print(f"      [retardo] {espera:.1f}s{sufijo}")
+    time.sleep(espera)
+
+
+def obtener_soup(url, intentos=3):
+    """Descarga una pagina y devuelve su BeautifulSoup, o None si falla.
+
+    Ante un 429 (demasiadas peticiones) o error de red, reintenta con
+    espera creciente: 3s, 6s, 12s.
+    """
+    espera = 3
+    for intento in range(1, intentos + 1):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+            r.raise_for_status()
+            return BeautifulSoup(r.text, "html.parser")
+        except requests.RequestException as error:
+            es_429 = getattr(error.response, "status_code", None) == 429
+            if intento < intentos:
+                print(f"  [REINTENTO {intento}/{intentos - 1}] "
+                      f"{'429' if es_429 else 'error'} en {url}; "
+                      f"esperando {espera}s")
+                time.sleep(espera)
+                espera *= 2
+            else:
+                print(f"  [ERROR] {url} -> {error}")
+    return None
 
 
 def scrape_elderecho(fecha):
@@ -141,6 +174,9 @@ def main():
     print("\n[1/2] elderecho.com ...")
     filas_elderecho = scrape_elderecho(fecha)
     print(f"      {len(filas_elderecho)} articulos")
+
+    # Retardo antes de golpear la segunda fuente.
+    esperar_entre_peticiones("law360.com")
 
     print("[2/2] law360.com ...")
     filas_law360 = scrape_law360(fecha)

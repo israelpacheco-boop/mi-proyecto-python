@@ -46,6 +46,10 @@ resultados_scraping.xlsx
 *.xlsx
 *.csv
 
+# Logs generados por los scripts
+*.log
+scraper_log.txt
+
 # IDE
 .idea/
 .vscode/
