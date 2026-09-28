@@ -164,6 +164,37 @@ def scrape_law360(fecha):
     return filas
 
 
+def guardar_excel(df, ruta=ARCHIVO_SALIDA):
+    """Guarda el DataFrame acumulando el historico y eliminando duplicados.
+
+    Si el archivo ya existe, se lee con pandas, se concatena con las
+    noticias nuevas y se descartan las filas cuyo Titulo ya estaba
+    presente. Asi el archivo conserva la_union de todas las ejecuciones.
+    """
+    if ruta.exists():
+        try:
+            previos = pd.read_excel(ruta)
+            # Normaliza las columnas por si el archivo previo se creo
+            # con otra version del script.
+            previos = previos.reindex(columns=COLUMNAS)
+            previos = previos.dropna(subset=["Titulo"])
+            combined = pd.concat([previos, df], ignore_index=True)
+            antes = len(combined)
+            # Deduplicar por Titulo: la primera aparicion (la mas antigua)
+            # se conserva, de modo que se conserva la fecha original.
+            combinado = combined.drop_duplicates(subset=["Titulo"], keep="first")
+            df = combinado
+            print(f"\n  [historico] {len(previos)} registros previos + "
+                  f"{antes - len(previos)} nuevos = {antes} filas")
+            print(f"  [historico] {antes - len(df)} duplicados eliminados")
+        except Exception as error:
+            print(f"  [AVISO] No se pudo leer el archivo previo "
+                  f"({error}); se guardara solo la extraccion actual.")
+
+    df.to_excel(ruta, index=False, engine="openpyxl", sheet_name="Noticias")
+    return df
+
+
 def main():
     print("=" * 60)
     print(" Recopilador de noticias legales")
@@ -196,11 +227,11 @@ def main():
     print("\nPrimeras 5 filas:")
     print(df.head(5)[["Fuente", "Seccion", "Titulo"]].to_string(index=False))
 
-    df.to_excel(ARCHIVO_SALIDA, index=False, engine="openpyxl",
-                sheet_name="Noticias")
-    print(f"\nArchivo generado: {ARCHIVO_SALIDA}")
+    df_final = guardar_excel(df)
+    print(f"\nArchivo: {ARCHIVO_SALIDA}")
     print(f"Tamano: {ARCHIVO_SALIDA.stat().st_size} bytes")
-    print(f"Total de registros: {len(df)}")
+    print(f"Registros en esta ejecucion: {len(df)}")
+    print(f"Total acumulado en el historico: {len(df_final)}")
     print("=" * 60)
     return 0
 

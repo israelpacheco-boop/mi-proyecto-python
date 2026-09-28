@@ -11,6 +11,7 @@ mi-proyecto-python/
 ├── scraper.py              # Scraper de ejemplo (quotes.toscrape.com -> Excel)
 ├── news_scraper.py         # Noticias legales (elderecho.com + law360.com -> Excel)
 ├── run_scraper.bat         # Ejecutor de Windows: activa .venv y lanza el scraper
+├── logs/                   # Logs con fecha de cada ejecucion (generado)
 ├── requirements.txt        # Dependencias del proyecto
 ├── .gitignore              # Archivos excluidos del control de versiones
 └── README.md               # Este archivo
@@ -125,34 +126,69 @@ schtasks /delete /tn "Actualizacion_Noticias_Legales" /f
 
 ### 3. Comprobar los registros
 
-Toda la salida de cada ejecucion queda en `scraper_log.txt`, en la raiz del
-proyecto. Ese archivo se sobrescribe en cada ejecucion, por lo que solo
-conserva el registro de la ultima corrida.
+Cada ejecucion genera su propio archivo de log con marca de tiempo dentro de
+la carpeta `logs/`, con el formato `scraper_AAAA-MM-DD.log`. La carpeta se
+crea automaticamente si no existe.
 
-Para ver el contenido completo:
+Esto significa que **el log del dia se sobrescribe en cada corrida de ese
+dia**, pero los dias anteriores se conservan. Por ejemplo, tras varios dias
+la carpeta contendra:
+
+```
+logs/
+├── scraper_2026-09-28.log
+├── scraper_2026-09-29.log
+└── scraper_2026-09-30.log
+```
+
+Para listar los logs disponibles:
 
 ```bat
-type scraper_log.txt
+dir logs
+```
+
+Para ver el contenido completo de uno:
+
+```bat
+type logs\scraper_2026-09-28.log
 ```
 
 Para ver solo las ultimas lineas:
 
 ```bash
-Get-Content scraper_log.txt -Tail 20
+Get-Content logs\scraper_$(Get-Date -Format yyyy-MM-dd).log -Tail 20
 ```
 
-Buscar errores en el log:
+Buscar errores en el log del dia:
 
 ```bash
-Select-String -Path scraper_log.txt -Pattern "ERROR", "REINTENTO"
+Select-String -Path logs\*.log -Pattern "ERROR", "REINTENTO"
 ```
 
 El log incluye el retardo aleatorio aplicado entre peticiones, los reintentos
-ante errores HTTP 429 y un resumen con el total de registros extraidos por
-cada fuente.
+ante errores HTTP 429, el detalle de la deduplicacion del historico y un
+resumen con el total de registros extraidos por cada fuente.
 
-Los archivos `.xlsx` y `.log` estan excluidos en `.gitignore`: son datos
-generados, no codigo fuente, y se regeneran ejecutando los scripts.
+### 4. Historico acumulado de noticias
+
+`noticias_legales.xlsx` no se sobrescribe: acumula el historico.
+
+En cada ejecucion, si el archivo ya existe, el script:
+
+1. Lee el archivo previo con `pandas.read_excel()`.
+2. Lo concatena con las noticias recien extraidas.
+3. Elimina las filas cuyo titulo ya estaba presente, usando
+   `drop_duplicates(subset=["Titulo"], keep="first")`.
+4. Guarda de nuevo el conjunto completo.
+
+La deduplicacion se hace por la columna `Titulo` y conserva la primera
+aparicion, de modo que cada noticia mantiene la fecha en que fue vista por
+primera vez. La columna `Fecha de Extraccion` permite saber de que corrida
+procede cada registro.
+
+Los archivos `.xlsx`, `.log` y la carpeta `logs/` estan excluidos en
+`.gitignore`: son datos generados, no codigo fuente, y se regeneran ejecutando
+los scripts.
 
 ## Notas
 

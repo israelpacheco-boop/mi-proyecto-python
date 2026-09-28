@@ -47,6 +47,7 @@ resultados_scraping.xlsx
 *.csv
 
 # Logs generados por los scripts
+logs/
 *.log
 scraper_log.txt
 
