@@ -41,6 +41,11 @@ env/
 venv/
 ENV/
 
+# Datos generados por scripts
+resultados_scraping.xlsx
+*.xlsx
+*.csv
+
 # IDE
 .idea/
 .vscode/
